@@ -97,8 +97,10 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		log.Println("Shutting down")
 	}()
 
+	// ioutil.WriteFile("WG_InitGlobalLogger.txt", []byte(args[0]+"|"+service.Path), 0755)
 	err = ringlogger.InitGlobalLogger("TUN")
 	if err != nil {
+		// ioutil.WriteFile("WG_InitGlobalLogger_ERROR.txt", []byte("ERROR: " + services.ErrorRingloggerOpen.Error() + " | "+err.Error()), 0755)
 		serviceError = services.ErrorRingloggerOpen
 		return
 	}
@@ -113,19 +115,26 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		}
 	}()
 
-	conf, err := conf.LoadFromPath(service.Path)
+	adapterName := conf.GetServiceName();
+
+	log.Println("Adapter Name", adapterName)
+	conf, err := conf.LoadFromString(service.Path,adapterName);
 	if err != nil {
+		// ioutil.WriteFile("WG_LoadFromString_ERROR.txt", []byte(err.Error()), 0755)
+		log.Println("LoadFromString error", []byte(err.Error()))
 		serviceError = services.ErrorLoadConfiguration
 		return
 	}
 	conf.DeduplicateNetworkEntries()
-	err = CopyConfigOwnerToIPCSecurityDescriptor(service.Path)
-	if err != nil {
-		serviceError = services.ErrorLoadConfiguration
-		return
-	}
+	// Stopped CopyConfigOwnerToIPCSecurityDescriptor
+	// err = CopyConfigOwnerToIPCSecurityDescriptor(service.Path)
+	// if err != nil {
+	// 	serviceError = services.ErrorLoadConfiguration
+	// 	return
+	// }
 
-	logPrefix := fmt.Sprintf("[%s] ", conf.Name)
+	// logPrefix := fmt.Sprintf("[%s] ", conf.Name)
+	var logPrefix = ""
 	log.SetPrefix(logPrefix)
 
 	log.Println("Starting", version.UserAgent())
@@ -158,7 +167,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	}
 
 	log.Println("Creating Wintun interface")
-	wintun, err := tun.CreateTUNWithRequestedGUID(conf.Name, deterministicGUID(conf), 0)
+	wintun, err := tun.CreateTUNWithRequestedGUID(adapterName, deterministicGUID(conf), 0)
 	if err != nil {
 		serviceError = services.ErrorCreateWintun
 		return
@@ -191,7 +200,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	dev = device.NewDevice(wintun, logger)
 
 	log.Println("Setting interface configuration")
-	uapi, err = ipc.UAPIListen(conf.Name)
+	uapi, err = ipc.UAPIListen(adapterName)
 	if err != nil {
 		serviceError = services.ErrorUAPIListen
 		return
@@ -242,14 +251,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	}
 }
 
-func Run(confPath string) error {
-	name, err := conf.NameFromPath(confPath)
-	if err != nil {
-		return err
-	}
-	serviceName, err := services.ServiceNameOfTunnel(name)
-	if err != nil {
-		return err
-	}
-	return svc.Run(serviceName, &tunnelService{confPath})
+func Run(confText string) error {
+	serviceName := conf.GetServiceName();
+	return svc.Run(serviceName, &tunnelService{confText})
 }

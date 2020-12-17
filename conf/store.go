@@ -18,6 +18,8 @@ import (
 const configFileSuffix = ".conf.dpapi"
 const configFileUnencryptedSuffix = ".conf"
 
+var serviceName string
+
 func ListConfigNames() ([]string, error) {
 	configFileDir, err := tunnelConfigurationsDirectory()
 	if err != nil {
@@ -128,6 +130,13 @@ func LoadFromName(name string) (*Config, error) {
 	return LoadFromPath(filepath.Join(configFileDir, name+configFileSuffix))
 }
 
+func LoadFromString(configText string, name string) (*Config, error) {
+	if !disableAutoMigration {
+		tunnelConfigurationsDirectory() // Provoke migrations, if needed.
+	}
+	return FromWgQuickWithUnknownEncoding(string([]byte(configText)), name)
+}
+
 func LoadFromPath(path string) (*Config, error) {
 	if !disableAutoMigration {
 		tunnelConfigurationsDirectory() // Provoke migrations, if needed.
@@ -155,20 +164,29 @@ func PathIsEncrypted(path string) bool {
 }
 
 func NameFromPath(path string) (string, error) {
-	name := filepath.Base(path)
-	if !((len(name) > len(configFileSuffix) && strings.HasSuffix(name, configFileSuffix)) ||
-		(len(name) > len(configFileUnencryptedSuffix) && strings.HasSuffix(name, configFileUnencryptedSuffix))) {
-		return "", errors.New("Path must end in either " + configFileSuffix + " or " + configFileUnencryptedSuffix)
-	}
-	if strings.HasSuffix(path, configFileSuffix) {
-		name = strings.TrimSuffix(name, configFileSuffix)
-	} else {
-		name = strings.TrimSuffix(name, configFileUnencryptedSuffix)
-	}
-	if !TunnelNameIsValid(name) {
-		return "", errors.New("Tunnel name is not valid")
-	}
-	return name, nil
+	return GetServiceName(), nil
+	// name := filepath.Base(path)
+	// if !((len(name) > len(configFileSuffix) && strings.HasSuffix(name, configFileSuffix)) ||
+	// 	(len(name) > len(configFileUnencryptedSuffix) && strings.HasSuffix(name, configFileUnencryptedSuffix))) {
+	// 	return "", errors.New("Path must end in either " + configFileSuffix + " or " + configFileUnencryptedSuffix)
+	// }
+	// if strings.HasSuffix(path, configFileSuffix) {
+	// 	name = strings.TrimSuffix(name, configFileSuffix)
+	// } else {
+	// 	name = strings.TrimSuffix(name, configFileUnencryptedSuffix)
+	// }
+	// if !TunnelNameIsValid(name) {
+	// 	return "", errors.New("Tunnel name is not valid")
+	// }
+	// return name, nil
+}
+
+func GetServiceName() (string) {
+	return serviceName;
+}
+
+func SetServiceName(serviceAndAdapterName string){
+	serviceName = serviceAndAdapterName
 }
 
 func (config *Config) Save() error {
