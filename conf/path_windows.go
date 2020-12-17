@@ -42,13 +42,28 @@ func PresetRootDirectory(root string) {
 	disableAutoMigration = true
 }
 
+func SetRootDirectory() (string,error) {
+
+	root, err := os.Executable()
+	
+	if err != nil {
+		return "", err
+	}
+	root = filepath.Dir(root)
+
+	cachedRootDir = root
+	disableAutoMigration = true
+
+	return root, nil
+}
+
 func RootDirectory() (string, error) {
 	if cachedRootDir != "" {
 		return cachedRootDir, nil
 	}
 	root, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_CREATE)
 	if err != nil {
-		return "", err
+		return "", err 
 	}
 	c := filepath.Join(root, "WireGuard")
 	err = os.MkdirAll(c, os.ModeDir|0700)
