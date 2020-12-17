@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package conf
@@ -28,8 +28,8 @@ func (conf *Config) ToWgQuick() string {
 		output.WriteString(fmt.Sprintf("Address = %s\n", strings.Join(addrStrings[:], ", ")))
 	}
 
-	if len(conf.Interface.DNS) + len(conf.Interface.DNSSearch) > 0 {
-		addrStrings := make([]string, 0, len(conf.Interface.DNS) + len(conf.Interface.DNSSearch))
+	if len(conf.Interface.DNS)+len(conf.Interface.DNSSearch) > 0 {
+		addrStrings := make([]string, 0, len(conf.Interface.DNS)+len(conf.Interface.DNSSearch))
 		for _, address := range conf.Interface.DNS {
 			addrStrings = append(addrStrings, address.String())
 		}
@@ -39,6 +39,19 @@ func (conf *Config) ToWgQuick() string {
 
 	if conf.Interface.MTU > 0 {
 		output.WriteString(fmt.Sprintf("MTU = %d\n", conf.Interface.MTU))
+	}
+
+	if len(conf.Interface.PreUp) > 0 {
+		output.WriteString(fmt.Sprintf("PreUp = %s\n", conf.Interface.PreUp))
+	}
+	if len(conf.Interface.PostUp) > 0 {
+		output.WriteString(fmt.Sprintf("PostUp = %s\n", conf.Interface.PostUp))
+	}
+	if len(conf.Interface.PreDown) > 0 {
+		output.WriteString(fmt.Sprintf("PreDown = %s\n", conf.Interface.PreDown))
+	}
+	if len(conf.Interface.PostDown) > 0 {
+		output.WriteString(fmt.Sprintf("PostDown = %s\n", conf.Interface.PostDown))
 	}
 
 	for _, peer := range conf.Peers {

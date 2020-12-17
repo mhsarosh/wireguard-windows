@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 #include <windows.h>
@@ -17,7 +17,7 @@
 #define MANAGER_SERVICE_NAME TEXT("WireGuardManager")
 #define TUNNEL_SERVICE_PREFIX TEXT("WireGuardTunnel$")
 
-enum log_level { LOG_LEVEL_INFO, LOG_LEVEL_WARN, LOG_LEVEL_ERR };
+enum log_level { LOG_LEVEL_INFO, LOG_LEVEL_WARN, LOG_LEVEL_ERR, LOG_LEVEL_MSIERR };
 
 static void log_messagef(MSIHANDLE installer, enum log_level level, const TCHAR *format, ...)
 {
@@ -49,6 +49,10 @@ static void log_messagef(MSIHANDLE installer, enum log_level level, const TCHAR 
 		template = TEXT("WireGuard error: [1]");
 		type = INSTALLMESSAGE_ERROR;
 		break;
+	case LOG_LEVEL_MSIERR:
+		template = TEXT("[1]");
+		type = INSTALLMESSAGE_ERROR;
+		break;
 	default:
 		goto out;
 	}
@@ -76,6 +80,134 @@ static void log_errorf(MSIHANDLE installer, enum log_level level, DWORD error_co
 		     prefix ?: TEXT("Error"), error_code, system_message);
 	LocalFree(prefix);
 	LocalFree(system_message);
+}
+
+__declspec(dllexport) UINT __stdcall CheckWow64(MSIHANDLE installer)
+{
+	UINT ret = ERROR_SUCCESS;
+	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	HMODULE kernel32 = GetModuleHandle(TEXT("kernel32.dll"));
+	BOOL(WINAPI *IsWow64Process2)(HANDLE hProcess, USHORT *pProcessMachine, USHORT *pNativeMachine);
+	USHORT process_machine, native_machine;
+	BOOL is_wow64_process;
+
+	if (!kernel32) {
+		ret = GetLastError();
+		log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("Failed to get kernel32.dll handle"));
+		goto out;
+	}
+	IsWow64Process2 = (void *)GetProcAddress(kernel32, "IsWow64Process2");
+	if (IsWow64Process2) {
+		if (!IsWow64Process2(GetCurrentProcess(), &process_machine, &native_machine)) {
+			ret = GetLastError();
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("Failed to determine Wow64 status from IsWow64Process2"));
+			goto out;
+		}
+		if (process_machine == IMAGE_FILE_MACHINE_UNKNOWN)
+			goto out;
+	} else {
+		if (!IsWow64Process(GetCurrentProcess(), &is_wow64_process)) {
+			ret = GetLastError();
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("Failed to determine Wow64 status from IsWow64Process"));
+			goto out;
+		}
+		if (!is_wow64_process)
+			goto out;
+	}
+	log_messagef(installer, LOG_LEVEL_MSIERR, TEXT("You must use the native version of WireGuard on this computer."));
+	ret = ERROR_INSTALL_FAILURE;
+out:
+	if (is_com_initialized)
+		CoUninitialize();
+	return ret;
+}
+
+extern NTAPI __declspec(dllimport) void RtlGetNtVersionNumbers(DWORD *MajorVersion, DWORD *MinorVersion, DWORD *BuildNumber);
+
+static int message_box(MSIHANDLE installer, TCHAR *text, UINT type)
+{
+	TCHAR progressOnly[2];
+	DWORD len;
+	MSIHANDLE record;
+	int ret;
+
+	len = _countof(progressOnly);
+	if (MsiGetProperty(installer, TEXT("MsiUIProgressOnly"), progressOnly, &len) == ERROR_SUCCESS && _tcstoul(progressOnly, NULL, 10) == 1)
+		return MessageBox(GetForegroundWindow(), text, TEXT("WireGuard"), type);
+	record = MsiCreateRecord(2);
+	MsiRecordSetString(record, 0, TEXT("[1]"));
+	MsiRecordSetString(record, 1, text);
+	ret = MsiProcessMessage(installer, INSTALLMESSAGE_USER | type, record);
+	MsiCloseHandle(record);
+	return ret;
+}
+
+__declspec(dllexport) UINT __stdcall CheckKB2921916(MSIHANDLE installer)
+{
+	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	UINT ret = ERROR_SUCCESS;
+	DWORD maj, min, build, len;
+	TCHAR uiLevel[10];
+	TCHAR setupapi_path[MAX_PATH];
+	HANDLE setupapi_handle = INVALID_HANDLE_VALUE;
+	HANDLE setupapi_filemapping = NULL;
+	const char *setupapi_bytes = NULL;
+	MEMORY_BASIC_INFORMATION setupapi_meminfo;
+	static const char setupapi_marker[] = "Signature Hash";
+
+	RtlGetNtVersionNumbers(&maj, &min, &build);
+	if (maj != 6 || min != 1)
+		goto out;
+
+	ret = ERROR_INSTALL_FAILURE;
+	if (!GetSystemDirectory(setupapi_path, _countof(setupapi_path)))
+		goto out;
+	if (!PathAppend(setupapi_path, TEXT("setupapi.dll")))
+		goto out;
+	setupapi_handle = CreateFile(setupapi_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (setupapi_handle == INVALID_HANDLE_VALUE)
+		goto out;
+	setupapi_filemapping = CreateFileMapping(setupapi_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+	if (!setupapi_filemapping)
+		goto out;
+	setupapi_bytes = MapViewOfFile(setupapi_filemapping, FILE_MAP_READ, 0, 0, 0);
+	if (!setupapi_bytes)
+		goto out;
+	if (VirtualQuery(setupapi_bytes, &setupapi_meminfo, sizeof(setupapi_meminfo)) != sizeof(setupapi_meminfo))
+		goto out;
+	if (setupapi_meminfo.RegionSize > strlen(setupapi_marker)) {
+		for (const char *p = setupapi_bytes + strlen(setupapi_marker) - 1; (p = memchr(p, 'h', setupapi_meminfo.RegionSize - (p - setupapi_bytes))); ++p) {
+			if (!memcmp(p - strlen(setupapi_marker) + 1, setupapi_marker, strlen(setupapi_marker))) {
+				ret = ERROR_SUCCESS;
+				goto out;
+			}
+		}
+	}
+
+	len = _countof(uiLevel);
+	if (MsiGetProperty(installer, TEXT("UILevel"), uiLevel, &len) != ERROR_SUCCESS || _tcstoul(uiLevel, NULL, 10) < INSTALLUILEVEL_BASIC) {
+		log_messagef(installer, LOG_LEVEL_MSIERR, TEXT("Use of WireGuard on Windows 7 requires KB2921916."));
+		goto out;
+	}
+#ifdef _WIN64
+	static const TCHAR url[] = TEXT("https://download.wireguard.com/windows-toolchain/distfiles/Windows6.1-KB2921916-x64.msu");
+#else
+	static const TCHAR url[] = TEXT("https://download.wireguard.com/windows-toolchain/distfiles/Windows6.1-KB2921916-x86.msu");
+#endif
+	if (message_box(installer, TEXT("Missing Windows Hotfix\n\nUse of WireGuard on Windows 7 requires KB2921916. Would you like to download the hotfix in your web browser?"), MB_ICONWARNING | MB_YESNO) == IDYES)
+		ShellExecute(GetForegroundWindow(), NULL, url, NULL, NULL, SW_SHOWNORMAL);
+	ret = ERROR_INSTALL_USEREXIT;
+
+out:
+	if (setupapi_bytes)
+		UnmapViewOfFile(setupapi_bytes);
+	if (setupapi_filemapping)
+		CloseHandle(setupapi_filemapping);
+	if (setupapi_handle != INVALID_HANDLE_VALUE)
+		CloseHandle(setupapi_handle);
+	if (is_com_initialized)
+		CoUninitialize();
+	return ret;
 }
 
 static UINT insert_service_control(MSIHANDLE installer, MSIHANDLE view, const TCHAR *service_name, bool start)
@@ -124,62 +256,6 @@ static UINT insert_service_control(MSIHANDLE installer, MSIHANDLE view, const TC
 out:
 	MsiCloseHandle(record);
 	return ret;
-}
-
-static bool remove_directory_recursive(MSIHANDLE installer, TCHAR path[MAX_PATH], unsigned int max_depth)
-{
-	HANDLE find_handle;
-	WIN32_FIND_DATA find_data;
-	TCHAR *path_end;
-
-	if (!max_depth) {
-		log_messagef(installer, LOG_LEVEL_WARN, TEXT("Too many levels of nesting at \"%1\""), path);
-		return false;
-	}
-
-	path_end = path + _tcsnlen(path, MAX_PATH);
-	if (!PathAppend(path, TEXT("*.*"))) {
-		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("PathAppend(\"%1\", \"*.*\") failed"), path);
-		return false;
-	}
-	find_handle = FindFirstFileEx(path, FindExInfoBasic, &find_data, FindExSearchNameMatch, NULL, 0);
-	if (find_handle == INVALID_HANDLE_VALUE) {
-		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("FindFirstFileEx(\"%1\") failed"), path);
-		return false;
-	}
-	do {
-		if (find_data.cFileName[0] == TEXT('.') && (find_data.cFileName[1] == TEXT('\0') || (find_data.cFileName[1] == TEXT('.') && find_data.cFileName[2] == TEXT('\0'))))
-			continue;
-
-		path_end[0] = TEXT('\0');
-		if (!PathAppend(path, find_data.cFileName)) {
-			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("PathAppend(\"%1\", \"%2\") failed"), path, find_data.cFileName);
-			continue;
-		}
-
-		if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-			remove_directory_recursive(installer, path, max_depth - 1);
-			continue;
-		}
-
-		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) && !SetFileAttributes(path, find_data.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY))
-			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("SetFileAttributes(\"%1\") failed"), path);
-
-		if (DeleteFile(path))
-			log_messagef(installer, LOG_LEVEL_INFO, TEXT("Deleted \"%1\""), path);
-		else
-			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("DeleteFile(\"%1\") failed"), path);
-	} while (FindNextFile(find_handle, &find_data));
-	FindClose(find_handle);
-
-	path_end[0] = TEXT('\0');
-	if (RemoveDirectory(path)) {
-		log_messagef(installer, LOG_LEVEL_INFO, TEXT("Removed \"%1\""), path);
-		return true;
-	} else {
-		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("RemoveDirectory(\"%1\") failed"), path);
-		return false;
-	}
 }
 
 __declspec(dllexport) UINT __stdcall EvaluateWireGuardServices(MSIHANDLE installer)
@@ -255,27 +331,82 @@ out:
 	return ret == ERROR_SUCCESS ? ret : ERROR_INSTALL_FAILURE;
 }
 
-__declspec(dllexport) UINT __stdcall RemoveConfigFolder(MSIHANDLE installer)
+__declspec(dllexport) UINT __stdcall LaunchApplicationAndAbort(MSIHANDLE installer)
 {
-	LSTATUS ret;
+	UINT ret = ERROR_INSTALL_FAILURE;
 	TCHAR path[MAX_PATH];
-	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	DWORD path_len = _countof(path);
+	PROCESS_INFORMATION pi;
+	STARTUPINFO si = { .cb = sizeof(STARTUPINFO) };
 
-	ret = SHRegGetPath(HKEY_LOCAL_MACHINE, TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\S-1-5-18"),
-			   TEXT("ProfileImagePath"), path, 0);
+	ret = MsiGetProperty(installer, TEXT("WireGuardFolder"), path, &path_len);
 	if (ret != ERROR_SUCCESS) {
-		log_errorf(installer, LOG_LEVEL_WARN, ret, TEXT("SHRegGetPath failed"));
+		log_errorf(installer, LOG_LEVEL_WARN, ret, TEXT("MsiGetProperty(\"WireGuardFolder\") failed"));
 		goto out;
 	}
-	if (!PathAppend(path, TEXT("AppData\\Local\\WireGuard"))) {
-		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("PathAppend(\"%1\", \"AppData\\Local\\WireGuard\") failed"), path);
+	if (!path[0] || !PathAppend(path, TEXT("wireguard.exe")))
+		goto out;
+	log_messagef(installer, LOG_LEVEL_INFO, TEXT("Launching %1"), path);
+	if (!CreateProcess(path, TEXT("wireguard"), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("Failed to create \"%1\" process"), path);
 		goto out;
 	}
-	remove_directory_recursive(installer, path, 10);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+out:
+	return ERROR_INSTALL_USEREXIT;
+}
+
+__declspec(dllexport) UINT __stdcall EvaluateWireGuardComponents(MSIHANDLE installer)
+{
+	UINT ret = ERROR_INSTALL_FAILURE;
+	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	INSTALLSTATE component_installed, component_action;
+	TCHAR path[MAX_PATH];
+	DWORD path_len = _countof(path);
+
+	ret = MsiGetComponentState(installer, TEXT("WireGuardExecutable"), &component_installed, &component_action);
+	if (ret != ERROR_SUCCESS) {
+		log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiGetComponentState(\"WireGuardExecutable\") failed"));
+		goto out;
+	}
+	ret = MsiGetProperty(installer, TEXT("WireGuardFolder"), path, &path_len);
+	if (ret != ERROR_SUCCESS) {
+		log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiGetProperty(\"WireGuardFolder\") failed"));
+		goto out;
+	}
+
+	if (component_action >= INSTALLSTATE_LOCAL) {
+		/* WireGuardExecutable component shall be installed. */
+		ret = MsiSetProperty(installer, TEXT("KillWireGuardProcesses"), path);
+		if (ret != ERROR_SUCCESS) {
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiSetProperty(\"KillWireGuardProcesses\") failed"));
+			goto out;
+		}
+	} else if (component_action >= INSTALLSTATE_REMOVED) {
+		/* WireGuardExecutable component shall be uninstalled. */
+		ret = MsiSetProperty(installer, TEXT("KillWireGuardProcesses"), path);
+		if (ret != ERROR_SUCCESS) {
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiSetProperty(\"KillWireGuardProcesses\") failed"));
+			goto out;
+		}
+		ret = MsiSetProperty(installer, TEXT("RemoveConfigFolder"), path);
+		if (ret != ERROR_SUCCESS) {
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiSetProperty(\"RemoveConfigFolder\") failed"));
+			goto out;
+		}
+		ret = MsiSetProperty(installer, TEXT("RemoveAdapters"), path);
+		if (ret != ERROR_SUCCESS) {
+			log_errorf(installer, LOG_LEVEL_ERR, ret, TEXT("MsiSetProperty(\"RemoveAdapters\") failed"));
+			goto out;
+		}
+	}
+	ret = ERROR_SUCCESS;
+
 out:
 	if (is_com_initialized)
 		CoUninitialize();
-	return ERROR_SUCCESS;
+	return ret == ERROR_SUCCESS ? ret : ERROR_INSTALL_FAILURE;
 }
 
 struct file_id { DWORD volume, index_high, index_low; };
@@ -299,36 +430,30 @@ static bool calculate_file_id(const TCHAR *path, struct file_id *id)
 	return true;
 }
 
-static bool calculate_known_file_id(const KNOWNFOLDERID *known_folder, const TCHAR *file, struct file_id *id)
-{
-	TCHAR *folder_path, process_path[MAX_PATH + 1];
-	bool ret = false;
-
-	if (SHGetKnownFolderPath(known_folder, KF_FLAG_DEFAULT, NULL, &folder_path) == S_OK) {
-		if (PathCombine(process_path, folder_path, file)) {
-			if (calculate_file_id(process_path, id))
-				ret = true;
-		}
-		CoTaskMemFree(folder_path);
-	}
-	return ret;
-}
-
 __declspec(dllexport) UINT __stdcall KillWireGuardProcesses(MSIHANDLE installer)
 {
 	HANDLE snapshot, process;
 	PROCESSENTRY32 entry = { .dwSize = sizeof(PROCESSENTRY32) };
-	TCHAR process_path[MAX_PATH + 1];
-	DWORD process_path_len;
+	TCHAR process_path[MAX_PATH], executable[MAX_PATH];
+	DWORD process_path_len = _countof(process_path);
 	struct file_id file_ids[3], file_id;
 	size_t file_ids_len = 0;
 	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	LSTATUS mret;
 
-	if (calculate_known_file_id(&FOLDERID_System, TEXT("wg.exe"), &file_ids[file_ids_len]))
+	mret = MsiGetProperty(installer, TEXT("CustomActionData"), process_path, &process_path_len);
+	if (mret != ERROR_SUCCESS) {
+		log_errorf(installer, LOG_LEVEL_WARN, mret, TEXT("MsiGetProperty(\"CustomActionData\") failed"));
+		goto out;
+	}
+	if (!process_path[0])
+		goto out;
+
+	log_messagef(installer, LOG_LEVEL_INFO, TEXT("Detecting running processes"));
+
+	if (PathCombine(executable, process_path, TEXT("wg.exe")) && calculate_file_id(executable, &file_ids[file_ids_len]))
 		++file_ids_len;
-	if (calculate_known_file_id(&FOLDERID_SystemX86, TEXT("wg.exe"), &file_ids[file_ids_len]))
-		++file_ids_len;
-	if (calculate_known_file_id(&FOLDERID_ProgramFiles, TEXT("WireGuard\\wireguard.exe"), &file_ids[file_ids_len]))
+	if (PathCombine(executable, process_path, TEXT("wireguard.exe")) && calculate_file_id(executable, &file_ids[file_ids_len]))
 		++file_ids_len;
 	if (!file_ids_len)
 		goto out;
@@ -366,6 +491,150 @@ __declspec(dllexport) UINT __stdcall KillWireGuardProcesses(MSIHANDLE installer)
 	}
 	CloseHandle(snapshot);
 
+out:
+	if (is_com_initialized)
+		CoUninitialize();
+	return ERROR_SUCCESS;
+}
+
+static bool remove_directory_recursive(MSIHANDLE installer, TCHAR path[MAX_PATH], unsigned int max_depth)
+{
+	HANDLE find_handle;
+	WIN32_FIND_DATA find_data;
+	TCHAR *path_end;
+
+	if (!max_depth) {
+		log_messagef(installer, LOG_LEVEL_WARN, TEXT("Too many levels of nesting at \"%1\""), path);
+		return false;
+	}
+
+	path_end = path + _tcsnlen(path, MAX_PATH);
+	if (!PathAppend(path, TEXT("*.*"))) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("PathAppend(\"%1\", \"*.*\") failed"), path);
+		return false;
+	}
+	find_handle = FindFirstFileEx(path, FindExInfoBasic, &find_data, FindExSearchNameMatch, NULL, 0);
+	if (find_handle == INVALID_HANDLE_VALUE) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("FindFirstFileEx(\"%1\") failed"), path);
+		return false;
+	}
+	do {
+		if (find_data.cFileName[0] == TEXT('.') && (find_data.cFileName[1] == TEXT('\0') || (find_data.cFileName[1] == TEXT('.') && find_data.cFileName[2] == TEXT('\0'))))
+			continue;
+
+		path_end[0] = TEXT('\0');
+		if (!PathAppend(path, find_data.cFileName)) {
+			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("PathAppend(\"%1\", \"%2\") failed"), path, find_data.cFileName);
+			continue;
+		}
+
+		if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+			remove_directory_recursive(installer, path, max_depth - 1);
+			continue;
+		}
+
+		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) && !SetFileAttributes(path, find_data.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY))
+			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("SetFileAttributes(\"%1\") failed"), path);
+
+		if (DeleteFile(path))
+			log_messagef(installer, LOG_LEVEL_INFO, TEXT("Deleted \"%1\""), path);
+		else
+			log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("DeleteFile(\"%1\") failed"), path);
+	} while (FindNextFile(find_handle, &find_data));
+	FindClose(find_handle);
+
+	path_end[0] = TEXT('\0');
+	if (RemoveDirectory(path)) {
+		log_messagef(installer, LOG_LEVEL_INFO, TEXT("Removed \"%1\""), path);
+		return true;
+	} else {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("RemoveDirectory(\"%1\") failed"), path);
+		return false;
+	}
+}
+
+__declspec(dllexport) UINT __stdcall RemoveConfigFolder(MSIHANDLE installer)
+{
+	LSTATUS ret;
+	TCHAR path[MAX_PATH];
+	DWORD path_len = _countof(path);
+	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+
+	ret = MsiGetProperty(installer, TEXT("CustomActionData"), path, &path_len);
+	if (ret != ERROR_SUCCESS) {
+		log_errorf(installer, LOG_LEVEL_WARN, ret, TEXT("MsiGetProperty(\"CustomActionData\") failed"));
+		goto out;
+	}
+	if (!path[0] || !PathAppend(path, TEXT("Data")))
+		goto out;
+	remove_directory_recursive(installer, path, 10);
+	RegDeleteKey(HKEY_LOCAL_MACHINE, TEXT("Software\\WireGuard")); // Assumes no WOW.
+out:
+	if (is_com_initialized)
+		CoUninitialize();
+	return ERROR_SUCCESS;
+}
+
+__declspec(dllexport) UINT __stdcall RemoveAdapters(MSIHANDLE installer)
+{
+	UINT ret;
+	bool is_com_initialized = SUCCEEDED(CoInitialize(NULL));
+	TCHAR path[MAX_PATH];
+	DWORD path_len = _countof(path);
+	HANDLE pipe;
+	char buf[0x200];
+	DWORD offset = 0, size_read;
+	PROCESS_INFORMATION pi;
+	STARTUPINFO si = {
+		.cb = sizeof(STARTUPINFO),
+		.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES,
+		.wShowWindow = SW_HIDE
+	};
+
+	ret = MsiGetProperty(installer, TEXT("CustomActionData"), path, &path_len);
+	if (ret != ERROR_SUCCESS) {
+		log_errorf(installer, LOG_LEVEL_WARN, ret, TEXT("MsiGetProperty(\"CustomActionData\") failed"));
+		goto out;
+	}
+	if (!path[0] || !PathAppend(path, TEXT("wireguard.exe")))
+		goto out;
+
+	if (!CreatePipe(&pipe, &si.hStdOutput, NULL, 0)) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("CreatePipe failed"));
+		goto out;
+	}
+	if (!SetHandleInformation(si.hStdOutput, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("SetHandleInformation failed"));
+		goto cleanup_pipe_w;
+	}
+	if (!CreateProcess(path, TEXT("wireguard /removealladapters"), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+		log_errorf(installer, LOG_LEVEL_WARN, GetLastError(), TEXT("Failed to create \"%1\" process"), path);
+		goto cleanup_pipe_w;
+	}
+	CloseHandle(si.hStdOutput);
+	buf[sizeof(buf) - 1] = '\0';
+	while (ReadFile(pipe, buf + offset, sizeof(buf) - offset - 1, &size_read, NULL)) {
+		char *nl;
+		buf[offset + size_read] = '\0';
+		nl = strchr(buf, '\n');
+		if (!nl) {
+			offset = size_read;
+			continue;
+		}
+		nl[0] = '\0';
+		log_messagef(installer, LOG_LEVEL_INFO, TEXT("%1!hs!"), buf);
+		offset = strlen(&nl[1]);
+		memmove(buf, &nl[1], offset);
+	}
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+	goto cleanup_pipe_r;
+
+cleanup_pipe_w:
+	CloseHandle(si.hStdOutput);
+cleanup_pipe_r:
+	CloseHandle(pipe);
 out:
 	if (is_com_initialized)
 		CoUninitialize();

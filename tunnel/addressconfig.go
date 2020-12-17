@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package tunnel
@@ -80,6 +80,7 @@ func configureInterface(family winipcfg.AddressFamily, conf *conf.Config, tun *t
 	foundDefault6 := false
 	for _, peer := range conf.Peers {
 		for _, allowedip := range peer.AllowedIPs {
+			allowedip.MaskSelf()
 			if (allowedip.Bits() == 32 && !haveV4Address) || (allowedip.Bits() == 128 && !haveV6Address) {
 				continue
 			}
@@ -130,7 +131,7 @@ func configureInterface(family winipcfg.AddressFamily, conf *conf.Config, tun *t
 
 	err = luid.SetRoutesForFamily(family, deduplicatedRoutes)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	ipif, err := luid.IPInterface(family)
@@ -179,7 +180,7 @@ func configureInterface(family winipcfg.AddressFamily, conf *conf.Config, tun *t
 }
 
 func enableFirewall(conf *conf.Config, tun *tun.NativeTun) error {
-	restrictAll := false
+	doNotRestrict := true
 	if len(conf.Peers) == 1 {
 	nextallowedip:
 		for _, allowedip := range conf.Peers[0].AllowedIPs {
@@ -189,13 +190,11 @@ func enableFirewall(conf *conf.Config, tun *tun.NativeTun) error {
 						continue nextallowedip
 					}
 				}
-				restrictAll = true
+				doNotRestrict = false
 				break
 			}
 		}
 	}
-	if restrictAll && len(conf.Interface.DNS) == 0 {
-		log.Println("Warning: no DNS server specified, despite having an allowed IPs of 0.0.0.0/0 or ::/0. There may be connectivity issues.")
-	}
-	return firewall.EnableFirewall(tun.LUID(), conf.Interface.DNS, restrictAll)
+	log.Println("Enabling firewall rules")
+	return firewall.EnableFirewall(tun.LUID(), doNotRestrict, conf.Interface.DNS)
 }

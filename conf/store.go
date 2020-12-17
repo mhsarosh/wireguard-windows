@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package conf
@@ -49,79 +49,6 @@ func ListConfigNames() ([]string, error) {
 	return configs[:i], nil
 }
 
-func MigrateUnencryptedConfigs() (int, []error) {
-	configFileDir, err := tunnelConfigurationsDirectory()
-	if err != nil {
-		return 0, []error{err}
-	}
-	files, err := ioutil.ReadDir(configFileDir)
-	if err != nil {
-		return 0, []error{err}
-	}
-	errs := make([]error, len(files))
-	i := 0
-	e := 0
-	for _, file := range files {
-		path := filepath.Join(configFileDir, file.Name())
-		name := filepath.Base(file.Name())
-		if len(name) <= len(configFileUnencryptedSuffix) || !strings.HasSuffix(name, configFileUnencryptedSuffix) {
-			continue
-		}
-		if !file.Mode().IsRegular() || file.Mode().Perm()&0444 == 0 {
-			continue
-		}
-
-		// We don't use ioutil's ReadFile, because we actually want RDWR, so that we can take advantage
-		// of Windows file locking for ensuring the file is finished being written.
-		f, err := os.OpenFile(path, os.O_RDWR, 0)
-		if err != nil {
-			errs[e] = err
-			e++
-			continue
-		}
-		bytes, err := ioutil.ReadAll(f)
-		f.Close()
-		if err != nil {
-			errs[e] = err
-			e++
-			continue
-		}
-		_, err = FromWgQuickWithUnknownEncoding(string(bytes), "input")
-		if err != nil {
-			errs[e] = err
-			e++
-			continue
-		}
-
-		bytes, err = dpapi.Encrypt(bytes, strings.TrimSuffix(name, configFileUnencryptedSuffix))
-		if err != nil {
-			errs[e] = err
-			e++
-			continue
-		}
-		dstFile := strings.TrimSuffix(path, configFileUnencryptedSuffix) + configFileSuffix
-		if _, err = os.Stat(dstFile); err != nil && !os.IsNotExist(err) {
-			errs[e] = errors.New("Unable to migrate to " + dstFile + " as it already exists")
-			e++
-			continue
-		}
-		err = ioutil.WriteFile(dstFile, bytes, 0600)
-		if err != nil {
-			errs[e] = err
-			e++
-			continue
-		}
-		err = os.Remove(path)
-		if err != nil && os.Remove(dstFile) == nil {
-			errs[e] = err
-			e++
-			continue
-		}
-		i++
-	}
-	return i, errs[:e]
-}
-
 func LoadFromName(name string) (*Config, error) {
 	configFileDir, err := tunnelConfigurationsDirectory()
 	if err != nil {
@@ -138,10 +65,6 @@ func LoadFromString(configText string, name string) (*Config, error) {
 }
 
 func LoadFromPath(path string) (*Config, error) {
-	if !disableAutoMigration {
-		tunnelConfigurationsDirectory() // Provoke migrations, if needed.
-	}
-
 	name, err := NameFromPath(path)
 	if err != nil {
 		return nil, err
@@ -189,7 +112,7 @@ func SetServiceName(serviceAndAdapterName string){
 	serviceName = serviceAndAdapterName
 }
 
-func (config *Config) Save() error {
+func (config *Config) Save(overwrite bool) error {
 	if !TunnelNameIsValid(config.Name) {
 		return errors.New("Tunnel name is not valid")
 	}
@@ -203,16 +126,7 @@ func (config *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(filename+".tmp", bytes, 0600)
-	if err != nil {
-		return err
-	}
-	err = os.Rename(filename+".tmp", filename)
-	if err != nil {
-		os.Remove(filename + ".tmp")
-		return err
-	}
-	return nil
+	return writeLockedDownFile(filename, overwrite, bytes)
 }
 
 func (config *Config) Path() (string, error) {

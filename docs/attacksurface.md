@@ -1,10 +1,10 @@
-### WireGuard for Windows Attack Surface
+# Attack Surface
 
 _This is an evolving document, describing currently known attack surface, a few mitigations, and several open questions. This is a work in progress. We document our current understanding with the intent of improving both our understanding and our security posture over time._
 
 WireGuard for Windows consists of four components: a kernel driver, and three separate interacting userspace parts.
 
-#### Wintun
+### Wintun
 
 Wintun is a kernel driver. It exposes:
 
@@ -29,8 +29,10 @@ The manager service is a userspace service running as Local System, responsible 
   - Extensive IPC using unnamed pipes, inherited by the UI process.
   - A readable `CreateFileMapping` handle to a binary ringlog shared by all services, inherited by the UI process.
   - It listens for service changes in tunnel services according to the string prefix "WireGuardTunnel$".
-  - It manages DPAPI-encrypted configuration files in Local System's local appdata directory, and makes some effort to enforce good configuration filenames.
-  - It uses `WTSEnumerateSessions` and `WTSSESSION_NOTIFICATION` to walk through each available session. It then uses `WTSQueryUserToken`, and then calls `GetTokenInformation(TokenGroups)` on it. If one of the returned group's SIDs matches `IsWellKnownSid(WinBuiltinAdministratorsSid)`, and has attributes of either `SE_GROUP_ENABLED` or `SE_GROUP_USE_FOR_DENY_ONLY` and calling `GetTokenInformation(TokenElevation)` on it or its `TokenLinkedToken` indicates that either is elevated, then it spawns the UI process as that the elevated user token, passing it three unnamed pipe handles for IPC and the log mapping handle, as described above.
+  - It manages DPAPI-encrypted configuration files in `C:\Program Files\WireGuard\Data`, which is created with `O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`, and makes some effort to enforce good configuration filenames.
+  - The actual DPAPI-encrypted configuration files are created with `O:SYG:SYD:PAI(A;;FA;;;SY)(A;;SD;;;BA)`.
+  - It uses `WTSEnumerateSessions` and `WTSSESSION_NOTIFICATION` to walk through each available session. It then uses `WTSQueryUserToken` to get the token belonging to each session and then determines whether or not it is an administrator token. To determine that, it calls `CheckTokenMembership(CreateWellKnownSid(WinBuiltinAdministratorsSid))` on a duplicated impersonation token, as well as and calling `GetTokenInformation(TokenElevation)` on it. If either of these are false, then it fetched the linked token using `GetTokenInformation(TokenLinkedToken)` and queries the same. Only then does it spawn the UI process as that the elevated user token, passing it three unnamed pipe handles for IPC and the log mapping handle, as described above.
+  - In the event that the administrator has set `HKLM\Software\WireGuard\LimitedOperatorUI` to 1, sessions are started for users that are a member of group S-1-5-32-556 (determined sing `CheckTokenMembership(CreateWellKnownSid(WinBuiltinNetworkConfigurationOperatorsSid))` on it and its linked token), with a more limited IPC interface, in which these non-admin users are denied private keys and tunnel editing rights. (This means users can potentially DoS the IPC server by draining notifications too slowly, or exhausting memory of the manager by spawning too many watcher go routines, or by sending garbage data that Go's `gob` decoder isn't expecting.)
 
 ### UI
 

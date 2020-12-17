@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package manager
@@ -56,6 +56,12 @@ func InstallManager() error {
 		}
 		if status.State != svc.Stopped {
 			service.Close()
+			if status.State == svc.StartPending {
+				// We were *just* started by something else, so return success here, assuming the other program
+				// starting this does the right thing. This can happen when, e.g., the updater relaunches the
+				// manager service and then invokes wireguard.exe to raise the UI.
+				return nil
+			}
 			return ErrManagerAlreadyRunning
 		}
 		err = service.Delete()
@@ -156,7 +162,7 @@ func InstallTunnel(configPath string) error {
 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
-		Dependencies: []string{"Nsi"},
+		Dependencies: []string{"Nsi", "TcpIp"},
 		DisplayName:  "WireGuard Tunnel: " + name,
 		SidType:      windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}

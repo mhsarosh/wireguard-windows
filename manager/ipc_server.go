@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package manager
@@ -34,11 +34,19 @@ var quitManagersChan = make(chan struct{}, 1)
 
 type ManagerService struct {
 	events        *os.File
+	eventLock     sync.Mutex
 	elevatedToken windows.Token
 }
 
 func (s *ManagerService) StoredConfig(tunnelName string) (*conf.Config, error) {
-	return conf.LoadFromName(tunnelName)
+	conf, err := conf.LoadFromName(tunnelName)
+	if err != nil {
+		return nil, err
+	}
+	if s.elevatedToken == 0 {
+		conf.Redact()
+	}
+	return conf, nil
 }
 
 func (s *ManagerService) RuntimeConfig(tunnelName string) (*conf.Config, error) {
@@ -69,38 +77,48 @@ func (s *ManagerService) RuntimeConfig(tunnelName string) (*conf.Config, error) 
 	if err != nil {
 		return nil, err
 	}
-	return conf.FromUAPI(string(resp), storedConfig)
+	conf, err := conf.FromUAPI(string(resp), storedConfig)
+	if err != nil {
+		return nil, err
+	}
+	if s.elevatedToken == 0 {
+		conf.Redact()
+	}
+	return conf, nil
 }
 
 func (s *ManagerService) Start(tunnelName string) error {
-	// For now, enforce only one tunnel at a time. Later we'll remove this silly restriction.
-	trackedTunnelsLock.Lock()
-	tt := make([]string, 0, len(trackedTunnels))
-	var inTransition string
-	for t, state := range trackedTunnels {
-		tt = append(tt, t)
-		if len(t) > 0 && (state == TunnelStarting || state == TunnelUnknown) {
-			inTransition = t
-			break
-		}
-	}
-	trackedTunnelsLock.Unlock()
-	if len(inTransition) != 0 {
-		return fmt.Errorf("Please allow the tunnel ‘%s’ to finish activating", inTransition)
-	}
-	go func() {
-		for _, t := range tt {
-			s.Stop(t)
-		}
-		for _, t := range tt {
-			state, err := s.State(t)
-			if err == nil && (state == TunnelStarted || state == TunnelStarting) {
-				log.Printf("[%s] Trying again to stop zombie tunnel", t)
-				s.Stop(t)
-				time.Sleep(time.Millisecond * 100)
+	// TODO: Rather than being lazy and gating this behind a knob (yuck!), we should instead keep track of the routes
+	// of each tunnel, and only deactivate in the case of a tunnel with identical routes being added.
+	if !conf.AdminBool("MultipleSimultaneousTunnels") {
+		trackedTunnelsLock.Lock()
+		tt := make([]string, 0, len(trackedTunnels))
+		var inTransition string
+		for t, state := range trackedTunnels {
+			tt = append(tt, t)
+			if len(t) > 0 && (state == TunnelStarting || state == TunnelUnknown) {
+				inTransition = t
+				break
 			}
 		}
-	}()
+		trackedTunnelsLock.Unlock()
+		if len(inTransition) != 0 {
+			return fmt.Errorf("Please allow the tunnel ‘%s’ to finish activating", inTransition)
+		}
+		go func() {
+			for _, t := range tt {
+				s.Stop(t)
+			}
+			for _, t := range tt {
+				state, err := s.State(t)
+				if err == nil && (state == TunnelStarted || state == TunnelStarting) {
+					log.Printf("[%s] Trying again to stop zombie tunnel", t)
+					s.Stop(t)
+					time.Sleep(time.Millisecond * 100)
+				}
+			}
+		}()
+	}
 	time.AfterFunc(time.Second*10, cleanupStaleWintunInterfaces)
 
 	// After that process is started -- it's somewhat asynchronous -- we install the new one.
@@ -149,6 +167,9 @@ func (s *ManagerService) WaitForStop(tunnelName string) error {
 }
 
 func (s *ManagerService) Delete(tunnelName string) error {
+	if s.elevatedToken == 0 {
+		return windows.ERROR_ACCESS_DENIED
+	}
 	err := s.Stop(tunnelName)
 	if err != nil {
 		return err
@@ -193,7 +214,10 @@ func (s *ManagerService) GlobalState() TunnelState {
 }
 
 func (s *ManagerService) Create(tunnelConfig *conf.Config) (*Tunnel, error) {
-	err := tunnelConfig.Save()
+	if s.elevatedToken == 0 {
+		return nil, windows.ERROR_ACCESS_DENIED
+	}
+	err := tunnelConfig.Save(true)
 	if err != nil {
 		return nil, err
 	}
@@ -216,12 +240,18 @@ func (s *ManagerService) Tunnels() ([]Tunnel, error) {
 }
 
 func (s *ManagerService) Quit(stopTunnelsOnQuit bool) (alreadyQuit bool, err error) {
+	if s.elevatedToken == 0 {
+		return false, windows.ERROR_ACCESS_DENIED
+	}
 	if !atomic.CompareAndSwapUint32(&haveQuit, 0, 1) {
 		return true, nil
 	}
 
 	// Work around potential race condition of delivering messages to the wrong process by removing from notifications.
 	managerServicesLock.Lock()
+	s.eventLock.Lock()
+	s.events = nil
+	s.eventLock.Unlock()
 	delete(managerServices, s)
 	managerServicesLock.Unlock()
 
@@ -240,10 +270,16 @@ func (s *ManagerService) Quit(stopTunnelsOnQuit bool) (alreadyQuit bool, err err
 }
 
 func (s *ManagerService) UpdateState() UpdateState {
+	if s.elevatedToken == 0 {
+		return UpdateStateUnknown
+	}
 	return updateState
 }
 
 func (s *ManagerService) Update() {
+	if s.elevatedToken == 0 {
+		return
+	}
 	progress := updater.DownloadVerifyAndExecute(uintptr(s.elevatedToken))
 	go func() {
 		for {
@@ -374,6 +410,9 @@ func (s *ManagerService) ServeConn(reader io.Reader, writer io.Writer) {
 				return
 			}
 			tunnel, retErr := s.Create(&config)
+			if tunnel == nil {
+				tunnel = &Tunnel{}
+			}
 			err = encoder.Encode(tunnel)
 			if err != nil {
 				return
@@ -428,19 +467,20 @@ func IPCServerListen(reader *os.File, writer *os.File, events *os.File, elevated
 	}
 
 	go func() {
-		defer printPanic()
 		managerServicesLock.Lock()
 		managerServices[service] = true
 		managerServicesLock.Unlock()
 		service.ServeConn(reader, writer)
 		managerServicesLock.Lock()
+		service.eventLock.Lock()
+		service.events = nil
+		service.eventLock.Unlock()
 		delete(managerServices, service)
 		managerServicesLock.Unlock()
-
 	}()
 }
 
-func notifyAll(notificationType NotificationType, ifaces ...interface{}) {
+func notifyAll(notificationType NotificationType, adminOnly bool, ifaces ...interface{}) {
 	if len(managerServices) == 0 {
 		return
 	}
@@ -460,8 +500,17 @@ func notifyAll(notificationType NotificationType, ifaces ...interface{}) {
 
 	managerServicesLock.RLock()
 	for m := range managerServices {
-		m.events.SetWriteDeadline(time.Now().Add(time.Second))
-		m.events.Write(buf.Bytes())
+		if m.elevatedToken == 0 && adminOnly {
+			continue
+		}
+		go func(m *ManagerService) {
+			m.eventLock.Lock()
+			defer m.eventLock.Unlock()
+			if m.events != nil {
+				m.events.SetWriteDeadline(time.Now().Add(time.Second))
+				m.events.Write(buf.Bytes())
+			}
+		}(m)
 	}
 	managerServicesLock.RUnlock()
 }
@@ -474,22 +523,22 @@ func errToString(err error) string {
 }
 
 func IPCServerNotifyTunnelChange(name string, state TunnelState, err error) {
-	notifyAll(TunnelChangeNotificationType, name, state, trackedTunnelsGlobalState(), errToString(err))
+	notifyAll(TunnelChangeNotificationType, false, name, state, trackedTunnelsGlobalState(), errToString(err))
 }
 
 func IPCServerNotifyTunnelsChange() {
-	notifyAll(TunnelsChangeNotificationType)
+	notifyAll(TunnelsChangeNotificationType, false)
 }
 
 func IPCServerNotifyUpdateFound(state UpdateState) {
-	notifyAll(UpdateFoundNotificationType, state)
+	notifyAll(UpdateFoundNotificationType, true, state)
 }
 
 func IPCServerNotifyUpdateProgress(dp updater.DownloadProgress) {
-	notifyAll(UpdateProgressNotificationType, dp.Activity, dp.BytesDownloaded, dp.BytesTotal, errToString(dp.Error), dp.Complete)
+	notifyAll(UpdateProgressNotificationType, true, dp.Activity, dp.BytesDownloaded, dp.BytesTotal, errToString(dp.Error), dp.Complete)
 }
 
 func IPCServerNotifyManagerStopping() {
-	notifyAll(ManagerStoppingNotificationType)
+	notifyAll(ManagerStoppingNotificationType, false)
 	time.Sleep(time.Millisecond * 200)
 }

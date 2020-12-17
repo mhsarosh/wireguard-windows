@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package updater
@@ -8,7 +8,6 @@ package updater
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -55,17 +54,7 @@ func versionNewerThanUs(candidate string) (bool, error) {
 }
 
 func findCandidate(candidates fileList) (*UpdateFound, error) {
-	var arch string
-	if runtime.GOARCH == "amd64" {
-		arch = "amd64"
-	} else if runtime.GOARCH == "386" {
-		arch = "x86"
-	} else if runtime.GOARCH == "arm64" {
-		arch = "arm64"
-	} else {
-		return nil, errors.New("Invalid GOARCH")
-	}
-	prefix := fmt.Sprintf(msiArchPrefix, arch)
+	prefix := fmt.Sprintf(msiArchPrefix, version.NativeArch())
 	suffix := msiSuffix
 	for name, hash := range candidates {
 		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {

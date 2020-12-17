@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package winipcfg
@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -25,25 +26,26 @@ func runNetsh(cmds []string) error {
 		return err
 	}
 	cmd := exec.Command(filepath.Join(system32, "netsh.exe")) // I wish we could append (, "-f", "CONIN$") but Go sets up the process context wrong.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("runNetsh stdin pipe - %v", err)
+		return fmt.Errorf("runNetsh stdin pipe - %w", err)
 	}
 	go func() {
 		defer stdin.Close()
 		io.WriteString(stdin, strings.Join(append(cmds, "exit\r\n"), "\r\n"))
 	}()
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("runNetsh run - %v", err)
-	}
 	// Horrible kludges, sorry.
-	cleaned := bytes.ReplaceAll(output, []byte("netsh>"), []byte{})
+	cleaned := bytes.ReplaceAll(output, []byte{'\r', '\n'}, []byte{'\n'})
+	cleaned = bytes.ReplaceAll(cleaned, []byte("netsh>"), []byte{})
 	cleaned = bytes.ReplaceAll(cleaned, []byte("There are no Domain Name Servers (DNS) configured on this computer."), []byte{})
 	cleaned = bytes.TrimSpace(cleaned)
-	if len(cleaned) != 0 {
-		return fmt.Errorf("runNetsh returned error strings.\ninput:\n%s\noutput\n:%s",
-			strings.Join(cmds, "\n"), bytes.ReplaceAll(output, []byte{'\r', '\n'}, []byte{'\n'}))
+	if len(cleaned) != 0 && err == nil {
+		return fmt.Errorf("netsh: %#q", string(cleaned))
+	} else if err != nil {
+		return fmt.Errorf("netsh: %v: %#q", err, string(cleaned))
 	}
 	return nil
 }
