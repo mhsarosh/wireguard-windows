@@ -58,9 +58,6 @@ func LoadFromName(name string) (*Config, error) {
 }
 
 func LoadFromString(configText string, name string) (*Config, error) {
-	if !disableAutoMigration {
-		tunnelConfigurationsDirectory() // Provoke migrations, if needed.
-	}
 	return FromWgQuickWithUnknownEncoding(string([]byte(configText)), name)
 }
 

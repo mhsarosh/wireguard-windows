@@ -54,7 +54,6 @@ func SetRootDirectory() (string,error) {
 	root = filepath.Dir(root)
 
 	cachedRootDir = root
-	disableAutoMigration = true
 
 	return root, nil
 }
