@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package manager
@@ -156,7 +156,7 @@ func InstallTunnel(configPath string) error {
 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
-		Dependencies: []string{"Nsi"},
+		Dependencies: []string{"Nsi", "TcpIp"},
 		DisplayName:  "WireGuard Tunnel: " + name,
 		SidType:      windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}

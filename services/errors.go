@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package services
@@ -30,6 +30,7 @@ const (
 	ErrorTrackTunnels
 	ErrorEnumerateSessions
 	ErrorDropPrivileges
+	ErrorRunScript
 	ErrorWin32
 )
 
@@ -65,6 +66,8 @@ func (e Error) Error() string {
 		return "Unable to enumerate current sessions"
 	case ErrorDropPrivileges:
 		return "Unable to drop privileges"
+	case ErrorRunScript:
+		return "An error occurred while running a configuration script command"
 	case ErrorWin32:
 		return "An internal Windows error has occurred"
 	default:
@@ -85,7 +88,7 @@ func DetermineErrorCode(err error, serviceError Error) (bool, uint32) {
 func CombineErrors(err error, serviceError Error) error {
 	if serviceError != ErrorSuccess {
 		if err != nil {
-			return fmt.Errorf("%v: %v", serviceError, err)
+			return fmt.Errorf("%v: %w", serviceError, err)
 		}
 		return serviceError
 	}

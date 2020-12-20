@@ -1,6 +1,8 @@
+// +build amd64 arm64
+
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package winipcfg
@@ -16,7 +18,6 @@ type IPAdapterWINSServerAddress struct {
 	_       uint32
 	Next    *IPAdapterWINSServerAddress
 	Address windows.SocketAddress
-	_       [4]byte
 }
 
 // IPAdapterGatewayAddress structure stores a single gateway address in a linked list of gateway addresses for a particular adapter.
@@ -26,7 +27,6 @@ type IPAdapterGatewayAddress struct {
 	_       uint32
 	Next    *IPAdapterGatewayAddress
 	Address windows.SocketAddress
-	_       [4]byte
 }
 
 // IPAdapterAddresses structure is the header node for a linked list of addresses for a particular adapter. This structure can simultaneously be used as part of a linked list of IP_ADAPTER_ADDRESSES structures.
@@ -70,14 +70,12 @@ type IPAdapterAddresses struct {
 	dhcpv6ClientDUIDLength uint32
 	DHCPv6IAID             uint32
 	FirstDNSSuffix         *IPAdapterDNSSuffix
-	_                      [4]byte
 }
 
 // MibIPInterfaceRow structure stores interface management information for a particular IP address family on a network interface.
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_ipinterface_row
 type MibIPInterfaceRow struct {
 	Family                               AddressFamily
-	_                                    [4]byte
 	InterfaceLUID                        LUID
 	InterfaceIndex                       uint32
 	MaxReassemblySize                    uint32
@@ -118,7 +116,6 @@ type MibIPInterfaceRow struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_ipinterface_table
 type mibIPInterfaceTable struct {
 	numEntries uint32
-	_          [4]byte
 	table      [anySize]MibIPInterfaceRow
 }
 
@@ -146,7 +143,6 @@ type MibIfRow2 struct {
 	MediaConnectState           NetIfMediaConnectState
 	NetworkGUID                 windows.GUID
 	ConnectionType              NetIfConnectionType
-	_                           [4]byte
 	TransmitLinkSpeed           uint64
 	ReceiveLinkSpeed            uint64
 	InOctets                    uint64
@@ -173,7 +169,6 @@ type MibIfRow2 struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_if_table2
 type mibIfTable2 struct {
 	numEntries uint32
-	_          [4]byte
 	table      [anySize]MibIfRow2
 }
 
@@ -181,7 +176,6 @@ type mibIfTable2 struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_unicastipaddress_row
 type MibUnicastIPAddressRow struct {
 	Address            RawSockaddrInet
-	_                  [4]byte
 	InterfaceLUID      LUID
 	InterfaceIndex     uint32
 	PrefixOrigin       PrefixOrigin
@@ -199,7 +193,6 @@ type MibUnicastIPAddressRow struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_unicastipaddress_table
 type mibUnicastIPAddressTable struct {
 	numEntries uint32
-	_          [4]byte
 	table      [anySize]MibUnicastIPAddressRow
 }
 
@@ -207,7 +200,6 @@ type mibUnicastIPAddressTable struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_anycastipaddress_row
 type MibAnycastIPAddressRow struct {
 	Address        RawSockaddrInet
-	_              [4]byte
 	InterfaceLUID  LUID
 	InterfaceIndex uint32
 	ScopeID        uint32
@@ -217,7 +209,6 @@ type MibAnycastIPAddressRow struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-mib_anycastipaddress_table
 type mibAnycastIPAddressTable struct {
 	numEntries uint32
-	_          [4]byte
 	table      [anySize]MibAnycastIPAddressRow
 }
 
@@ -225,6 +216,5 @@ type mibAnycastIPAddressTable struct {
 // https://docs.microsoft.com/en-us/windows/desktop/api/netioapi/ns-netioapi-_mib_ipforward_table2
 type mibIPforwardTable2 struct {
 	numEntries uint32
-	_          [4]byte
 	table      [anySize]MibIPforwardRow2
 }

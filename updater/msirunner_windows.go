@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package updater
@@ -19,7 +19,35 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func runMsi(msiPath string, userToken uintptr) error {
+type tempFile struct {
+	*os.File
+	originalHandle windows.Handle
+}
+
+func (t *tempFile) ExclusivePath() string {
+	if t.originalHandle != 0 {
+		t.Close() // TODO: sort of a toctou, but msi requires unshared file
+		t.originalHandle = 0
+	}
+	return t.Name()
+}
+
+func (t *tempFile) Delete() error {
+	if t.originalHandle == 0 {
+		name16, err := windows.UTF16PtrFromString(t.Name())
+		if err != nil {
+			return err
+		}
+		return windows.DeleteFile(name16) //TODO: how does this deal with reparse points?
+	}
+	disposition := byte(1)
+	err := windows.SetFileInformationByHandle(t.originalHandle, windows.FileDispositionInfo, &disposition, 1)
+	t.originalHandle = 0
+	t.Close()
+	return err
+}
+
+func runMsi(msi *tempFile, userToken uintptr) error {
 	system32, err := windows.GetSystemDirectory()
 	if err != nil {
 		return err
@@ -29,6 +57,7 @@ func runMsi(msiPath string, userToken uintptr) error {
 		return err
 	}
 	defer devNull.Close()
+	msiPath := msi.ExclusivePath()
 	attr := &os.ProcAttr{
 		Sys: &syscall.SysProcAttr{
 			Token: syscall.Token(userToken),
@@ -51,7 +80,7 @@ func runMsi(msiPath string, userToken uintptr) error {
 	return nil
 }
 
-func msiTempFile() (*os.File, error) {
+func msiTempFile() (*tempFile, error) {
 	var randBytes [32]byte
 	n, err := rand.Read(randBytes[:])
 	if err != nil {
@@ -68,16 +97,20 @@ func msiTempFile() (*os.File, error) {
 		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		SecurityDescriptor: sd,
 	}
-	// TODO: os.TempDir() returns C:\windows\temp when calling from this context. Supposedly this is mostly secure
-	// against TOCTOU, but who knows! Look into this!
-	name := filepath.Join(os.TempDir(), hex.EncodeToString(randBytes[:]))
+	windir, err := windows.GetWindowsDirectory()
+	if err != nil {
+		return nil, err
+	}
+	name := filepath.Join(windir, "Temp", hex.EncodeToString(randBytes[:]))
 	name16 := windows.StringToUTF16Ptr(name)
-	// TODO: it would be nice to specify delete_on_close, but msiexec.exe doesn't open its files with read sharing.
-	fileHandle, err := windows.CreateFile(name16, windows.GENERIC_WRITE, windows.FILE_SHARE_READ, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	fileHandle, err := windows.CreateFile(name16, windows.GENERIC_WRITE|windows.DELETE, 0, sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_TEMPORARY, 0)
 	runtime.KeepAlive(sd)
 	if err != nil {
 		return nil, err
 	}
 	windows.MoveFileEx(name16, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
-	return os.NewFile(uintptr(fileHandle), name), nil
+	return &tempFile{
+		File:           os.NewFile(uintptr(fileHandle), name),
+		originalHandle: fileHandle,
+	}, nil
 }

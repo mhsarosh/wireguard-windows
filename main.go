@@ -1,19 +1,23 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package main
 
 import (
+	"debug/pe"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/tun"
 
 	"golang.zx2c4.com/wireguard/windows/elevate"
 	"golang.zx2c4.com/wireguard/windows/l18n"
@@ -49,6 +53,7 @@ func usage() {
 		"/ui CMD_READ_HANDLE CMD_WRITE_HANDLE CMD_EVENT_HANDLE LOG_MAPPING_HANDLE",
 		"/dumplog OUTPUT_PATH",
 		"/update [LOG_FILE]",
+		"/removealladapters [LOG_FILE]",
 	}
 	builder := strings.Builder{}
 	for _, flag := range flags {
@@ -59,13 +64,31 @@ func usage() {
 }
 
 func checkForWow64() {
-	var b bool
-	err := windows.IsWow64Process(windows.CurrentProcess(), &b)
+	b, err := func() (bool, error) {
+		var processMachine, nativeMachine uint16
+		err := windows.IsWow64Process2(windows.CurrentProcess(), &processMachine, &nativeMachine)
+		if err == nil {
+			if nativeMachine == pe.IMAGE_FILE_MACHINE_ARM64 && runtime.GOARCH == "arm" {
+				//TODO: remove this exception when Go supports arm64
+				return false, nil
+			}
+			return processMachine != pe.IMAGE_FILE_MACHINE_UNKNOWN, nil
+		}
+		if !errors.Is(err, windows.ERROR_PROC_NOT_FOUND) {
+			return false, err
+		}
+		var b bool
+		err = windows.IsWow64Process(windows.CurrentProcess(), &b)
+		if err != nil {
+			return false, err
+		}
+		return b, nil
+	}()
 	if err != nil {
 		fatalf("Unable to determine whether the process is running under WOW64: %v", err)
 	}
 	if b {
-		fatalf("You must use the 64-bit version of WireGuard on this computer.")
+		fatalf("You must use the native version of WireGuard on this computer.")
 	}
 }
 
@@ -95,11 +118,11 @@ func execElevatedManagerServiceInstaller() error {
 		return err
 	}
 	err = elevate.ShellExecute(path, "/installmanagerservice", "", windows.SW_SHOW)
-	if err != nil {
+	if err != nil && err != windows.ERROR_CANCELLED {
 		return err
 	}
 	os.Exit(0)
-	return windows.ERROR_ACCESS_DENIED // Not reached
+	return windows.ERROR_UNHANDLED_EXCEPTION // Not reached
 }
 
 func pipeFromHandleArgument(handleStr string) (*os.File, error) {
@@ -111,13 +134,17 @@ func pipeFromHandleArgument(handleStr string) (*os.File, error) {
 }
 
 func main() {
+	if windows.SetDllDirectory("") != nil || windows.SetDefaultDllDirectories(windows.LOAD_LIBRARY_SEARCH_SYSTEM32) != nil {
+		panic("failed to restrict dll search path")
+	}
+
 	checkForWow64()
 
 	if len(os.Args) <= 1 {
-		checkForAdminGroup()
 		if ui.RaiseUI() {
 			return
 		}
+		checkForAdminGroup()
 		err := execElevatedManagerServiceInstaller()
 		if err != nil {
 			fatal(err)
@@ -190,9 +217,18 @@ func main() {
 		if len(os.Args) != 6 {
 			usage()
 		}
-		err := elevate.DropAllPrivileges(false)
-		if err != nil {
-			fatal(err)
+		var processToken windows.Token
+		isAdmin := false
+		err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE, &processToken)
+		if err == nil {
+			isAdmin = elevate.TokenIsElevatedOrElevatable(processToken)
+			processToken.Close()
+		}
+		if isAdmin {
+			err := elevate.DropAllPrivileges(false)
+			if err != nil {
+				fatal(err)
+			}
 		}
 		readPipe, err := pipeFromHandleArgument(os.Args[2])
 		if err != nil {
@@ -211,6 +247,7 @@ func main() {
 			fatal(err)
 		}
 		manager.InitializeIPCClient(readPipe, writePipe, eventPipe)
+		ui.IsAdmin = isAdmin
 		ui.RunUI()
 		return
 	case "/dumplog":
@@ -261,6 +298,29 @@ func main() {
 			if progress.Complete || progress.Error != nil {
 				return
 			}
+		}
+		return
+	case "/removealladapters":
+		if len(os.Args) != 2 && len(os.Args) != 3 {
+			usage()
+		}
+		var f *os.File
+		var err error
+		if len(os.Args) == 2 {
+			f = os.Stdout
+		} else {
+			f, err = os.Create(os.Args[2])
+			if err != nil {
+				fatal(err)
+			}
+			defer f.Close()
+		}
+		log.SetOutput(f)
+		rebootRequired, err := tun.WintunPool.DeleteDriver()
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+		} else if rebootRequired {
+			log.Println("A reboot may be required")
 		}
 		return
 	}

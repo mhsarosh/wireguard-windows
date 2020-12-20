@@ -1,18 +1,15 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package manager
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"runtime"
-	"runtime/debug"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -29,17 +26,6 @@ import (
 )
 
 type managerService struct{}
-
-func printPanic() {
-	if x := recover(); x != nil {
-		for _, line := range append([]string{fmt.Sprint(x)}, strings.Split(string(debug.Stack()), "\n")...) {
-			if len(strings.TrimSpace(line)) > 0 {
-				log.Println(line)
-			}
-		}
-		panic(x)
-	}
-}
 
 func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
@@ -61,7 +47,6 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 		serviceError = services.ErrorRingloggerOpen
 		return
 	}
-	defer printPanic()
 
 	log.Println("Starting", version.UserAgent())
 
@@ -77,19 +62,22 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 		return
 	}
 
+	moveConfigsFromLegacyStore()
+
 	err = trackExistingTunnels()
 	if err != nil {
 		serviceError = services.ErrorTrackTunnels
 		return
 	}
 
-	conf.RegisterStoreChangeCallback(func() { conf.MigrateUnencryptedConfigs() }) // Ignore return value for now, but could be useful later.
+	conf.RegisterStoreChangeCallback(conf.MigrateUnencryptedConfigs)
 	conf.RegisterStoreChangeCallback(IPCServerNotifyTunnelsChange)
 
 	procs := make(map[uint32]*os.Process)
 	aliveSessions := make(map[uint32]bool)
 	procsLock := sync.Mutex{}
 	stoppingManager := false
+	operatorGroupSid, _ := windows.CreateWellKnownSid(windows.WinBuiltinNetworkConfigurationOperatorsSid)
 
 	startProcess := func(session uint32) {
 		defer func() {
@@ -104,7 +92,24 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 		if err != nil {
 			return
 		}
-		if !elevate.TokenIsElevatedOrElevatable(userToken) {
+		isAdmin := elevate.TokenIsElevatedOrElevatable(userToken)
+		isOperator := false
+		if !isAdmin && conf.AdminBool("LimitedOperatorUI") && operatorGroupSid != nil {
+			linkedToken, err := userToken.GetLinkedToken()
+			var impersonationToken windows.Token
+			if err == nil {
+				err = windows.DuplicateTokenEx(linkedToken, windows.TOKEN_QUERY, nil, windows.SecurityImpersonation, windows.TokenImpersonation, &impersonationToken)
+				linkedToken.Close()
+			} else {
+				err = windows.DuplicateTokenEx(userToken, windows.TOKEN_QUERY, nil, windows.SecurityImpersonation, windows.TokenImpersonation, &impersonationToken)
+			}
+			if err == nil {
+				isOperator, err = impersonationToken.IsMember(operatorGroupSid)
+				isOperator = isOperator && err == nil
+				impersonationToken.Close()
+			}
+		}
+		if !isAdmin && !isOperator {
 			userToken.Close()
 			return
 		}
@@ -125,23 +130,28 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 			return
 		}
 		userProfileDirectory, _ := userToken.GetUserProfileDirectory()
-		var elevatedToken windows.Token
-		if userToken.IsElevated() {
-			elevatedToken = userToken
+		var elevatedToken, runToken windows.Token
+		if isAdmin {
+			if userToken.IsElevated() {
+				elevatedToken = userToken
+			} else {
+				elevatedToken, err = userToken.GetLinkedToken()
+				userToken.Close()
+				if err != nil {
+					log.Printf("Unable to elevate token: %v", err)
+					return
+				}
+				if !elevatedToken.IsElevated() {
+					elevatedToken.Close()
+					log.Println("Linked token is not elevated")
+					return
+				}
+			}
+			runToken = elevatedToken
 		} else {
-			elevatedToken, err = userToken.GetLinkedToken()
-			userToken.Close()
-			if err != nil {
-				log.Printf("Unable to elevate token: %v", err)
-				return
-			}
-			if !elevatedToken.IsElevated() {
-				elevatedToken.Close()
-				log.Println("Linked token is not elevated")
-				return
-			}
+			runToken = userToken
 		}
-		defer elevatedToken.Close()
+		defer runToken.Close()
 		userToken = 0
 		first := true
 		for {
@@ -186,7 +196,7 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 			log.Printf("Starting UI process for user ‘%s@%s’ for session %d", username, domain, session)
 			attr := &os.ProcAttr{
 				Sys: &syscall.SysProcAttr{
-					Token: syscall.Token(elevatedToken),
+					Token: syscall.Token(runToken),
 				},
 				Files: []*os.File{devNull, devNull, devNull},
 				Dir:   userProfileDirectory,
@@ -243,7 +253,6 @@ func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest
 	goStartProcess := func(session uint32) {
 		procsGroup.Add(1)
 		go func() {
-			defer printPanic()
 			startProcess(session)
 			procsGroup.Done()
 		}()

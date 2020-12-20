@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package firewall
@@ -101,7 +101,7 @@ func registerBaseObjects(session uintptr) (*baseObjects, error) {
 	return bo, nil
 }
 
-func EnableFirewall(luid uint64, restrictToDNSServers []net.IP, restrictAll bool) error {
+func EnableFirewall(luid uint64, doNotRestrict bool, restrictToDNSServers []net.IP) error {
 	if wfpSession != 0 {
 		return errors.New("The firewall has already been enabled")
 	}
@@ -122,26 +122,24 @@ func EnableFirewall(luid uint64, restrictToDNSServers []net.IP, restrictAll bool
 			return wrapErr(err)
 		}
 
-		if len(restrictToDNSServers) > 0 {
-			err = blockDNS(restrictToDNSServers, session, baseObjects, 15, 14)
-			if err != nil {
-				return wrapErr(err)
+		if !doNotRestrict {
+			if len(restrictToDNSServers) > 0 {
+				err = blockDNS(restrictToDNSServers, session, baseObjects, 15, 14)
+				if err != nil {
+					return wrapErr(err)
+				}
 			}
-		}
 
-		if restrictAll {
 			err = permitLoopback(session, baseObjects, 13)
 			if err != nil {
 				return wrapErr(err)
 			}
-		}
 
-		err = permitTunInterface(session, baseObjects, 12, luid)
-		if err != nil {
-			return wrapErr(err)
-		}
+			err = permitTunInterface(session, baseObjects, 12, luid)
+			if err != nil {
+				return wrapErr(err)
+			}
 
-		if restrictAll {
 			err = permitDHCPIPv4(session, baseObjects, 12)
 			if err != nil {
 				return wrapErr(err)
@@ -164,9 +162,7 @@ func EnableFirewall(luid uint64, restrictToDNSServers []net.IP, restrictAll bool
 				return wrapErr(err)
 			}
 			*/
-		}
 
-		if restrictAll {
 			err = blockAll(session, baseObjects, 0)
 			if err != nil {
 				return wrapErr(err)

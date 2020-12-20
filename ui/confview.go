@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package ui
@@ -50,6 +50,7 @@ type interfaceView struct {
 	mtu          *labelTextLine
 	addresses    *labelTextLine
 	dns          *labelTextLine
+	scripts      *labelTextLine
 	toggleActive *toggleActiveLine
 	lines        []widgetsLine
 }
@@ -305,6 +306,7 @@ func newInterfaceView(parent walk.Container) (*interfaceView, error) {
 		{l18n.Sprintf("MTU:"), &iv.mtu},
 		{l18n.Sprintf("Addresses:"), &iv.addresses},
 		{l18n.Sprintf("DNS servers:"), &iv.dns},
+		{l18n.Sprintf("Scripts:"), &iv.scripts},
 	}
 	if iv.lines, err = createLabelTextLines(items, parent, &disposables); err != nil {
 		return nil, err
@@ -364,7 +366,11 @@ func (iv *interfaceView) widgetsLines() []widgetsLine {
 }
 
 func (iv *interfaceView) apply(c *conf.Interface) {
-	iv.publicKey.show(c.PrivateKey.Public().String())
+	if IsAdmin {
+		iv.publicKey.show(c.PrivateKey.Public().String())
+	} else {
+		iv.publicKey.hide()
+	}
 
 	if c.ListenPort > 0 {
 		iv.listenPort.show(strconv.Itoa(int(c.ListenPort)))
@@ -388,8 +394,8 @@ func (iv *interfaceView) apply(c *conf.Interface) {
 		iv.addresses.hide()
 	}
 
-	if len(c.DNS) + len(c.DNSSearch) > 0 {
-		addrStrings := make([]string, 0, len(c.DNS) + len(c.DNSSearch))
+	if len(c.DNS)+len(c.DNSSearch) > 0 {
+		addrStrings := make([]string, 0, len(c.DNS)+len(c.DNSSearch))
 		for _, address := range c.DNS {
 			addrStrings = append(addrStrings, address.String())
 		}
@@ -398,6 +404,29 @@ func (iv *interfaceView) apply(c *conf.Interface) {
 	} else {
 		iv.dns.hide()
 	}
+
+	var scriptsInUse []string
+	if len(c.PreUp) > 0 {
+		scriptsInUse = append(scriptsInUse, l18n.Sprintf("pre-up"))
+	}
+	if len(c.PostUp) > 0 {
+		scriptsInUse = append(scriptsInUse, l18n.Sprintf("post-up"))
+	}
+	if len(c.PreDown) > 0 {
+		scriptsInUse = append(scriptsInUse, l18n.Sprintf("pre-down"))
+	}
+	if len(c.PostDown) > 0 {
+		scriptsInUse = append(scriptsInUse, l18n.Sprintf("post-down"))
+	}
+	if len(scriptsInUse) > 0 {
+		if conf.AdminBool("DangerousScriptExecution") {
+			iv.scripts.show(strings.Join(scriptsInUse, l18n.EnumerationSeparator()))
+		} else {
+			iv.scripts.show(l18n.Sprintf("disabled, per policy"))
+		}
+	} else {
+		iv.scripts.hide()
+	}
 }
 
 func (pv *peerView) widgetsLines() []widgetsLine {
@@ -405,9 +434,13 @@ func (pv *peerView) widgetsLines() []widgetsLine {
 }
 
 func (pv *peerView) apply(c *conf.Peer) {
-	pv.publicKey.show(c.PublicKey.String())
+	if IsAdmin {
+		pv.publicKey.show(c.PublicKey.String())
+	} else {
+		pv.publicKey.hide()
+	}
 
-	if !c.PresharedKey.IsZero() {
+	if !c.PresharedKey.IsZero() && IsAdmin {
 		pv.presharedKey.show(l18n.Sprintf("enabled"))
 	} else {
 		pv.presharedKey.hide()
