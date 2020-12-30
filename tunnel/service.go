@@ -43,6 +43,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	var nativeTun *tun.NativeTun
 	var config *conf.Config
 	var err error
+	var adapterName string
 	serviceError := services.ErrorSuccess
 
 	defer func() {
@@ -86,7 +87,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		}()
 
 		if logErr == nil && dev != nil && config != nil {
-			logErr = runScriptCommand(config.Interface.PreDown, config.Name)
+			logErr = runScriptCommand(config.Interface.PreDown, adapterName)
 		}
 		if watcher != nil {
 			watcher.Destroy()
@@ -98,7 +99,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			dev.Close()
 		}
 		if logErr == nil && dev != nil && config != nil {
-			_ = runScriptCommand(config.Interface.PostDown, config.Name)
+			_ = runScriptCommand(config.Interface.PostDown, adapterName)
 		}
 		stopIt <- true
 		log.Println("Shutting down")
@@ -120,19 +121,25 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		}
 	}()
 
-	config, err = conf.LoadFromPath(service.Path)
+	adapterName = conf.GetServiceName();
+	log.Println("Adapter Name", adapterName)
+
+	config, err = conf.LoadFromString(service.Path, adapterName)
 	if err != nil {
+		log.Println("LoadFromString error", []byte(err.Error()))
 		serviceError = services.ErrorLoadConfiguration
 		return
 	}
 	config.DeduplicateNetworkEntries()
-	err = CopyConfigOwnerToIPCSecurityDescriptor(service.Path)
-	if err != nil {
-		serviceError = services.ErrorLoadConfiguration
-		return
-	}
+	// Stopped CopyConfigOwnerToIPCSecurityDescriptor
+	// err = CopyConfigOwnerToIPCSecurityDescriptor(service.Path)
+	// if err != nil {
+	// 	serviceError = services.ErrorLoadConfiguration
+	// 	return
+	// }
 
-	logPrefix := fmt.Sprintf("[%s] ", config.Name)
+	// logPrefix := fmt.Sprintf("[%s] ", config.Name)
+	var logPrefix = ""
 	log.SetPrefix(logPrefix)
 
 	log.Println("Starting", version.UserAgent())
@@ -165,7 +172,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	}
 
 	log.Println("Creating Wintun interface")
-	wintun, err := tun.CreateTUNWithRequestedGUID(config.Name, deterministicGUID(config), 0)
+	wintun, err := tun.CreateTUNWithRequestedGUID(adapterName, deterministicGUID(config), 0)
 	if err != nil {
 		serviceError = services.ErrorCreateWintun
 		return
@@ -178,7 +185,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		log.Printf("Using Wintun/%d.%d", (wintunVersion>>16)&0xffff, wintunVersion&0xffff)
 	}
 
-	err = runScriptCommand(config.Interface.PreUp, config.Name)
+	err = runScriptCommand(config.Interface.PreUp, adapterName)
 	if err != nil {
 		serviceError = services.ErrorRunScript
 		return
@@ -203,7 +210,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	dev = device.NewDevice(wintun, logger)
 
 	log.Println("Setting interface configuration")
-	uapi, err = ipc.UAPIListen(config.Name)
+	uapi, err = ipc.UAPIListen(adapterName)
 	if err != nil {
 		serviceError = services.ErrorUAPIListen
 		return
@@ -231,7 +238,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		}
 	}()
 
-	err = runScriptCommand(config.Interface.PostUp, config.Name)
+	err = runScriptCommand(config.Interface.PostUp, adapterName)
 	if err != nil {
 		serviceError = services.ErrorRunScript
 		return
@@ -260,14 +267,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	}
 }
 
-func Run(confPath string) error {
-	name, err := conf.NameFromPath(confPath)
-	if err != nil {
-		return err
-	}
-	serviceName, err := services.ServiceNameOfTunnel(name)
-	if err != nil {
-		return err
-	}
-	return svc.Run(serviceName, &tunnelService{confPath})
+func Run(confText string) error {
+	serviceName := conf.GetServiceName();
+	return svc.Run(serviceName, &tunnelService{confText})
 }

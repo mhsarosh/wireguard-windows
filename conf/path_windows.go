@@ -44,6 +44,20 @@ func PresetRootDirectory(root string) {
 	cachedRootDir = root
 }
 
+func SetRootDirectory() (string,error) {
+
+	root, err := os.Executable()
+
+	if err != nil {
+		return "", err
+	}
+	root = filepath.Dir(root)
+
+	cachedRootDir = root
+
+	return root, nil
+}
+
 func RootDirectory(create bool) (string, error) {
 	if cachedRootDir != "" {
 		return cachedRootDir, nil

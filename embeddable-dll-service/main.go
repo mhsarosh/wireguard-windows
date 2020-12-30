@@ -16,14 +16,22 @@ import (
 
 	"crypto/rand"
 	"log"
-	"path/filepath"
 	"unsafe"
 )
 
 //export WireGuardTunnelService
-func WireGuardTunnelService(confFile16 *uint16) bool {
+func WireGuardTunnelService(confFile16 *uint16, serviceName16 *uint16) bool {
 	confFile := windows.UTF16PtrToString(confFile16)
-	conf.PresetRootDirectory(filepath.Dir(confFile))
+	serviceName := windows.UTF16ToString((*[(1 << 30) - 1]uint16)(unsafe.Pointer(serviceName16))[:])
+
+	conf.SetServiceName(serviceName)
+	root, error := conf.SetRootDirectory()
+
+	if error != nil {
+		log.Printf("Service run error, root cannot be deduced: %v", error)
+	} else {
+		log.Printf("tunnel.dll Root deduced as: %v", root)
+	}
 	tunnel.UseFixedGUIDInsteadOfDeterministic = true
 	err := tunnel.Run(confFile)
 	if err != nil {
