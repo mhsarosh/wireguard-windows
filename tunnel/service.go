@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package tunnel
@@ -41,6 +41,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	var uapi net.Listener
 	var watcher *interfaceWatcher
 	var nativeTun *tun.NativeTun
+	var config *conf.Config
 	var err error
 	serviceError := services.ErrorSuccess
 
@@ -84,6 +85,9 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			}
 		}()
 
+		if logErr == nil && dev != nil && config != nil {
+			logErr = runScriptCommand(config.Interface.PreDown, config.Name)
+		}
 		if watcher != nil {
 			watcher.Destroy()
 		}
@@ -92,6 +96,9 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		}
 		if dev != nil {
 			dev.Close()
+		}
+		if logErr == nil && dev != nil && config != nil {
+			_ = runScriptCommand(config.Interface.PostDown, config.Name)
 		}
 		stopIt <- true
 		log.Println("Shutting down")
@@ -173,11 +180,17 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 		return
 	}
 	nativeTun = wintun.(*tun.NativeTun)
-	wintunVersion, ndisVersion, err := nativeTun.Version()
+	wintunVersion, err := nativeTun.RunningVersion()
 	if err != nil {
 		log.Printf("Warning: unable to determine Wintun version: %v", err)
 	} else {
-		log.Printf("Using Wintun/%s (NDIS %s)", wintunVersion, ndisVersion)
+		log.Printf("Using Wintun/%d.%d", (wintunVersion>>16)&0xffff, wintunVersion&0xffff)
+	}
+
+	err = runScriptCommand(conf.Interface.PreUp, adapterName)
+	if err != nil {
+		serviceError = services.ErrorRunScript
+		return
 	}
 
 	log.Println("Enabling firewall rules")
@@ -227,6 +240,12 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			go dev.IpcHandle(conn)
 		}
 	}()
+
+	err = runScriptCommand(conf.Interface.PostUp, adapterName)
+	if err != nil {
+		serviceError = services.ErrorRunScript
+		return
+	}
 
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	log.Println("Startup complete")

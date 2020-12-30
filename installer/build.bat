@@ -1,30 +1,27 @@
 @echo off
 rem SPDX-License-Identifier: MIT
-rem Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+rem Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
 
 setlocal
 set PATHEXT=.exe
 set BUILDDIR=%~dp0
 cd /d %BUILDDIR% || exit /b 1
 
-for /f "tokens=3" %%a in ('findstr /r "WIREGUARD_WINDOWS_VERSION_STRING.*[0-9.]*" ..\version\version.h') do set WIREGUARD_VERSION=%%a
+for /f "tokens=3" %%a in ('findstr /r "Number.*=.*[0-9.]*" ..\version\version.go') do set WIREGUARD_VERSION=%%a
 set WIREGUARD_VERSION=%WIREGUARD_VERSION:"=%
 
 set WIX_CANDLE_FLAGS=-nologo -dWIREGUARD_VERSION="%WIREGUARD_VERSION%"
 set WIX_LIGHT_FLAGS=-nologo -spdb
-set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sw1056
-set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sice:ICE30
+set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sice:ICE39
 set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sice:ICE61
-set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sice:ICE09
+set WIX_LIGHT_FLAGS=%WIX_LIGHT_FLAGS% -sice:ICE03
 
 if exist .deps\prepared goto :build
 :installdeps
 	rmdir /s /q .deps 2> NUL
 	mkdir .deps || goto :error
 	cd .deps || goto :error
-	call :download wintun-x86.msm https://www.wintun.net/builds/wintun-x86-0.8.1.msm 5b47f83ffa9c361a360196d692f64755183e82c65f4753accc92087e6736af10 || goto :error
-	call :download wintun-amd64.msm https://www.wintun.net/builds/wintun-amd64-0.8.1.msm af9644438a716f5a022052e3574ee0404c3e3309daff84889d656178fbc6b168 || goto :error
-	call :download wix-binaries.zip https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip 2c1888d5d1dba377fc7fa14444cf556963747ff9a0a289a3599cf09da03b9e2e || goto :error
+	call :download wix-binaries.zip https://wixtoolset.org/downloads/v3.14.0.4118/wix314-binaries.zip 34dcbba9952902bfb710161bd45ee2e721ffa878db99f738285a21c9b09c6edb || goto :error
 	echo [+] Extracting wix-binaries.zip
 	mkdir wix\bin || goto :error
 	tar -xf wix-binaries.zip -C wix\bin || goto :error
@@ -34,13 +31,15 @@ if exist .deps\prepared goto :build
 	cd .. || goto :error
 
 :build
+	set PATH=%BUILDDIR%..\.deps\llvm-mingw\bin;%PATH%
 	set WIX=%BUILDDIR%.deps\wix\
 	set CFLAGS=-O3 -Wall -std=gnu11 -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 -municode -DUNICODE -D_UNICODE -DNDEBUG
 	set LDFLAGS=-shared -s -Wl,--kill-at -Wl,--major-os-version=6 -Wl,--minor-os-version=1 -Wl,--major-subsystem-version=6 -Wl,--minor-subsystem-version=1 -Wl,--tsaware -Wl,--dynamicbase -Wl,--nxcompat -Wl,--export-all-symbols
-	set LDLIBS=-lmsi -lole32 -lshlwapi -lshell32 -luuid
+	set LDLIBS=-lmsi -lole32 -lshlwapi -lshell32 -luuid -lntdll
 	call :msi x86 i686 x86 || goto :error
-	set CGO_LDFLAGS=%CGO_LDFLAGS% -Wl,--high-entropy-va
 	call :msi amd64 x86_64 x64 || goto :error
+	call :msi arm armv7 arm || goto :error
+	call :msi arm64 aarch64 arm64 || goto :error
 	if exist ..\sign.bat call ..\sign.bat
 	if "%SigningCertificate%"=="" goto :success
 	if "%TimestampServer%"=="" goto :success
@@ -59,7 +58,6 @@ if exist .deps\prepared goto :build
 	goto :eof
 
 :msi
-	set PATH=%BUILDDIR%..\.deps\%~2-w64-mingw32-native\bin;%PATH%
 	set CC=%~2-w64-mingw32-gcc
 	if not exist "%~1" mkdir "%~1"
 	echo [+] Compiling %1

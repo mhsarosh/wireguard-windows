@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package ui
@@ -76,6 +76,7 @@ func NewTunnelsPage() (*TunnelsPage, error) {
 	tp.fillerContainer.SetLayout(hlayout)
 	tp.fillerButton, _ = walk.NewPushButton(tp.fillerContainer)
 	tp.fillerButton.SetMinMaxSize(walk.Size{200, 0}, walk.Size{200, 0})
+	tp.fillerButton.SetVisible(IsAdmin)
 	tp.fillerButton.Clicked().Attach(func() {
 		if tp.fillerHandler != nil {
 			tp.fillerHandler()
@@ -105,6 +106,7 @@ func NewTunnelsPage() (*TunnelsPage, error) {
 	})
 	editTunnel.SetText(l18n.Sprintf("&Edit"))
 	editTunnel.Clicked().Attach(tp.onEditTunnel)
+	editTunnel.SetVisible(IsAdmin)
 
 	disposables.Spare()
 
@@ -133,6 +135,7 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	hlayout := walk.NewHBoxLayout()
 	hlayout.SetMargins(walk.Margins{})
 	toolBarContainer.SetLayout(hlayout)
+	toolBarContainer.SetVisible(IsAdmin)
 
 	if tp.listToolbar, err = walk.NewToolBarWithOrientationAndButtonStyle(toolBarContainer, walk.Horizontal, walk.ToolBarButtonImageBeforeText); err != nil {
 		return err
@@ -145,7 +148,7 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	tp.AddDisposable(addMenu)
 	importAction := walk.NewAction()
 	importAction.SetText(l18n.Sprintf("&Import tunnel(s) from file…"))
-	importActionIcon, _ := loadSystemIcon("imageres", 3, 16)
+	importActionIcon, _ := loadSystemIcon("imageres", -3, 16)
 	importAction.SetImage(importActionIcon)
 	importAction.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyO})
 	importAction.SetDefault(true)
@@ -153,13 +156,13 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	addMenu.Actions().Add(importAction)
 	addAction := walk.NewAction()
 	addAction.SetText(l18n.Sprintf("Add &empty tunnel…"))
-	addActionIcon, _ := loadSystemIcon("imageres", 2, 16)
+	addActionIcon, _ := loadSystemIcon("imageres", -2, 16)
 	addAction.SetImage(addActionIcon)
 	addAction.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyN})
 	addAction.Triggered().Attach(tp.onAddTunnel)
 	addMenu.Actions().Add(addAction)
 	addMenuAction := walk.NewMenuAction(addMenu)
-	addMenuActionIcon, _ := loadSystemIcon("shell32", 149, 16)
+	addMenuActionIcon, _ := loadSystemIcon("shell32", -258, 16)
 	addMenuAction.SetImage(addMenuActionIcon)
 	addMenuAction.SetText(l18n.Sprintf("Add Tunnel"))
 	addMenuAction.SetToolTip(importAction.Text())
@@ -169,7 +172,7 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	tp.listToolbar.Actions().Add(walk.NewSeparatorAction())
 
 	deleteAction := walk.NewAction()
-	deleteActionIcon, _ := loadSystemIcon("shell32", 131, 16)
+	deleteActionIcon, _ := loadSystemIcon("shell32", -240, 16)
 	deleteAction.SetImage(deleteActionIcon)
 	deleteAction.SetShortcut(walk.Shortcut{0, walk.KeyDelete})
 	deleteAction.SetToolTip(l18n.Sprintf("Remove selected tunnel(s)"))
@@ -178,7 +181,7 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	tp.listToolbar.Actions().Add(walk.NewSeparatorAction())
 
 	exportAction := walk.NewAction()
-	exportActionIcon, _ := loadSystemIcon("imageres", 165, 16) // Or "shell32", 45?
+	exportActionIcon, _ := loadSystemIcon("imageres", -174, 16)
 	exportAction.SetImage(exportActionIcon)
 	exportAction.SetToolTip(l18n.Sprintf("Export all tunnels to zip"))
 	exportAction.Triggered().Attach(tp.onExportTunnels)
@@ -206,34 +209,40 @@ func (tp *TunnelsPage) CreateToolbar() error {
 	importAction2.SetText(l18n.Sprintf("&Import tunnel(s) from file…"))
 	importAction2.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyO})
 	importAction2.Triggered().Attach(tp.onImport)
+	importAction2.SetVisible(IsAdmin)
 	contextMenu.Actions().Add(importAction2)
 	tp.ShortcutActions().Add(importAction2)
 	addAction2 := walk.NewAction()
 	addAction2.SetText(l18n.Sprintf("Add &empty tunnel…"))
 	addAction2.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyN})
 	addAction2.Triggered().Attach(tp.onAddTunnel)
+	addAction2.SetVisible(IsAdmin)
 	contextMenu.Actions().Add(addAction2)
 	tp.ShortcutActions().Add(addAction2)
 	exportAction2 := walk.NewAction()
 	exportAction2.SetText(l18n.Sprintf("Export all tunnels to &zip…"))
 	exportAction2.Triggered().Attach(tp.onExportTunnels)
+	exportAction2.SetVisible(IsAdmin)
 	contextMenu.Actions().Add(exportAction2)
 	contextMenu.Actions().Add(walk.NewSeparatorAction())
 	editAction := walk.NewAction()
 	editAction.SetText(l18n.Sprintf("Edit &selected tunnel…"))
 	editAction.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyE})
+	editAction.SetVisible(IsAdmin)
 	editAction.Triggered().Attach(tp.onEditTunnel)
 	contextMenu.Actions().Add(editAction)
 	tp.ShortcutActions().Add(editAction)
 	deleteAction2 := walk.NewAction()
 	deleteAction2.SetText(l18n.Sprintf("&Remove selected tunnel(s)"))
 	deleteAction2.SetShortcut(walk.Shortcut{0, walk.KeyDelete})
+	deleteAction2.SetVisible(IsAdmin)
 	deleteAction2.Triggered().Attach(tp.onDelete)
 	contextMenu.Actions().Add(deleteAction2)
 	tp.listView.ShortcutActions().Add(deleteAction2)
 	selectAllAction := walk.NewAction()
 	selectAllAction.SetText(l18n.Sprintf("Select &all"))
 	selectAllAction.SetShortcut(walk.Shortcut{walk.ModControl, walk.KeyA})
+	selectAllAction.SetVisible(IsAdmin)
 	selectAllAction.Triggered().Attach(tp.onSelectAll)
 	contextMenu.Actions().Add(selectAllAction)
 	tp.listView.ShortcutActions().Add(selectAllAction)
@@ -326,6 +335,9 @@ func (tp *TunnelsPage) importFiles(paths []string) {
 		}
 
 		if lastErr != nil || unparsedConfigs == nil {
+			if lastErr == nil {
+				lastErr = errors.New(l18n.Sprintf("no configuration files were found"))
+			}
 			syncedMsgBox(l18n.Sprintf("Error"), l18n.Sprintf("Could not import selected configuration: %v", lastErr), walk.MsgBoxIconWarning)
 			return
 		}
@@ -387,16 +399,16 @@ func (tp *TunnelsPage) exportTunnels(filePath string) {
 		for _, tunnel := range tp.listView.model.tunnels {
 			cfg, err := tunnel.StoredConfig()
 			if err != nil {
-				return fmt.Errorf("onExportTunnels: tunnel.StoredConfig failed: %v", err)
+				return fmt.Errorf("onExportTunnels: tunnel.StoredConfig failed: %w", err)
 			}
 
 			w, err := writer.Create(tunnel.Name + ".conf")
 			if err != nil {
-				return fmt.Errorf("onExportTunnels: writer.Create failed: %v", err)
+				return fmt.Errorf("onExportTunnels: writer.Create failed: %w", err)
 			}
 
 			if _, err := w.Write(([]byte)(cfg.ToWgQuick())); err != nil {
-				return fmt.Errorf("onExportTunnels: cfg.ToWgQuick failed: %v", err)
+				return fmt.Errorf("onExportTunnels: cfg.ToWgQuick failed: %w", err)
 			}
 		}
 

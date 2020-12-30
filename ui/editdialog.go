@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package ui
@@ -78,7 +78,7 @@ func newEditDialog(owner walk.Form, tunnel *manager.Tunnel) (*EditDialog, error)
 	dlg.SetTitle(title)
 	dlg.SetLayout(layout)
 	dlg.SetMinMaxSize(walk.Size{500, 400}, walk.Size{0, 0})
-	if icon, err := loadSystemIcon("imageres", 109, 32); err == nil {
+	if icon, err := loadSystemIcon("imageres", -114, 32); err == nil {
 		dlg.SetIcon(icon)
 	}
 
@@ -129,7 +129,7 @@ func newEditDialog(owner walk.Form, tunnel *manager.Tunnel) (*EditDialog, error)
 		return nil, err
 	}
 	dlg.blockUntunneledTrafficCB.SetText(l18n.Sprintf("&Block untunneled traffic (kill-switch)"))
-	dlg.blockUntunneledTrafficCB.SetToolTipText(l18n.Sprintf("When a configuration has exactly one peer, and that peer has an allowed IPs containing at least one of 0.0.0.0/0 or ::/0, then the tunnel service engages a firewall ruleset to block all traffic that is neither to nor from the tunnel interface, with special exceptions for DHCP and NDP."))
+	dlg.blockUntunneledTrafficCB.SetToolTipText(l18n.Sprintf("When a configuration has exactly one peer, and that peer has an allowed IPs containing at least one of 0.0.0.0/0 or ::/0, then the tunnel service engages a firewall ruleset to block all traffic that is neither to nor from the tunnel interface or is to the wrong DNS server, with special exceptions for DHCP and NDP."))
 	dlg.blockUntunneledTrafficCB.SetVisible(false)
 	dlg.blockUntunneledTrafficCB.CheckedChanged().Attach(dlg.onBlockUntunneledTrafficCBCheckedChanged)
 
@@ -279,7 +279,7 @@ err:
 
 func (dlg *EditDialog) onBlockUntunneledTrafficStateChanged(state int) {
 	dlg.blockUntunneledTraficCheckGuard = true
-	switch state {
+	switch syntax.BlockState(state) {
 	case syntax.InevaluableBlockingUntunneledTraffic:
 		dlg.blockUntunneledTrafficCB.SetVisible(false)
 	case syntax.BlockingUntunneledTraffic:

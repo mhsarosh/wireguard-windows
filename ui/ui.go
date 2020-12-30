@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package ui
@@ -23,6 +23,7 @@ import (
 var noTrayAvailable = false
 var shouldQuitManagerWhenExiting = false
 var startTime = time.Now()
+var IsAdmin = false // A global, because this really is global for the process
 
 func RunUI() {
 	runtime.LockOSThread()

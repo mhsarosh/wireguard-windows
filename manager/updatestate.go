@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package manager
@@ -24,8 +24,6 @@ const (
 var updateState = UpdateStateUnknown
 
 func checkForUpdates() {
-	defer printPanic()
-
 	if !version.IsRunningOfficialVersion() {
 		log.Println("Build is not official, so updates are disabled")
 		updateState = UpdateStateUpdatesDisabledUnofficialBuild

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package ui
@@ -95,7 +95,7 @@ func runAboutDialog(owner walk.Form) error {
 		return err
 	}
 	detailsLbl.SetTextAlignment(walk.AlignHCenterVNear)
-	detailsLbl.SetText(l18n.Sprintf("App version: %s\nGo backend version: %s\nGo version: %s\nOperating system: %s\nArchitecture: %s", version.Number, device.WireGuardGoVersion, strings.TrimPrefix(runtime.Version(), "go"), version.OsName(), runtime.GOARCH))
+	detailsLbl.SetText(l18n.Sprintf("App version: %s\nGo backend version: %s\nGo version: %s-%s\nOperating system: %s\nArchitecture: %s", version.Number, device.WireGuardGoVersion, strings.TrimPrefix(runtime.Version(), "go"), runtime.GOARCH, version.OsName(), version.NativeArch()))
 
 	copyrightLbl, err := walk.NewTextLabel(showingAboutDialog)
 	if err != nil {

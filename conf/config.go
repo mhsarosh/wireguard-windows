@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2019 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2019-2020 WireGuard LLC. All Rights Reserved.
  */
 
 package conf
@@ -49,6 +49,10 @@ type Interface struct {
 	MTU        uint16
 	DNS        []net.IP
 	DNSSearch  []string
+	PreUp      string
+	PostUp     string
+	PreDown    string
+	PostDown   string
 }
 
 type Peer struct {
@@ -78,6 +82,14 @@ func (r *IPCidr) IPNet() net.IPNet {
 	return net.IPNet{
 		IP:   r.IP,
 		Mask: net.CIDRMask(int(r.Cidr), int(r.Bits())),
+	}
+}
+
+func (r *IPCidr) MaskSelf() {
+	bits := int(r.Bits())
+	mask := net.CIDRMask(int(r.Cidr), bits)
+	for i := 0; i < bits/8; i++ {
+		r.IP[i] &= mask[i]
 	}
 }
 
@@ -228,5 +240,13 @@ func (conf *Config) DeduplicateNetworkEntries() {
 			i++
 		}
 		peer.AllowedIPs = peer.AllowedIPs[:i]
+	}
+}
+
+func (conf *Config) Redact() {
+	conf.Interface.PrivateKey = Key{}
+	for i := range conf.Peers {
+		conf.Peers[i].PublicKey = Key{}
+		conf.Peers[i].PresharedKey = Key{}
 	}
 }
